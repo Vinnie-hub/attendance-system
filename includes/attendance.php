@@ -37,22 +37,43 @@ function get_today_record(int $userId): array|false {
 /**
  * Shared GPS gate: returns null when allowed, or an error array when the
  * supplied coordinates are outside the office fence.
+ * Accepts optional GPS accuracy to apply a buffer matching the frontend logic.
  */
-function gps_gate(?float $lat, ?float $lng, string $action): ?array {
-    if ($lat === null || $lng === null) return null;
-    if (is_within_office($lat, $lng)) return null;
-    $office = get_office_name();
+function gps_gate(?float $lat, ?float $lng, string $action, ?float $accuracy = null): ?array {
+    if ($lat === null || $lng === null) return null; // legacy callers without GPS
+
+    $office = get_office_location();
+
+    // Reject obviously bad fixes (likely IP geolocation, not real GPS).
+    if ($accuracy !== null && $accuracy > MAX_ACCEPTABLE_ACCURACY_M) {
+        return [
+            'ok'  => false,
+            'msg' => "Your GPS fix is too imprecise (±" . round($accuracy) . " m). "
+                   . "Move outside or near a window, wait a few seconds, and try again.",
+        ];
+    }
+
+    // Effective radius = office radius + accuracy buffer (cap the buffer so
+    // a noisy fix can't grant unlimited slack).
+    $buffer  = $accuracy !== null ? min($accuracy, MAX_ACCURACY_BUFFER_M) : 0.0;
+    $dist    = haversine($lat, $lng, $office['latitude'], $office['longitude']);
+    $allowed = (float)$office['radius_m'] + $buffer;
+
+    if ($dist <= $allowed) return null;
+
     return [
         'ok'  => false,
-        'msg' => "You are not within the {$office} office radius. Please move closer to {$action}.",
+        'msg' => "You are not within the {$office['name']} office radius "
+               . "(you are ~" . number_format($dist) . " m away; allowed "
+               . number_format($allowed) . " m). Please move closer to {$action}.",
     ];
 }
 
-function do_check_in(int $userId, ?float $lat = null, ?float $lng = null): array {
+function do_check_in(int $userId, ?float $lat = null, ?float $lng = null, ?float $accuracy = null): array {
     if (get_today_record($userId)) {
         return ['ok' => false, 'msg' => 'You have already checked in today.'];
     }
-    if ($err = gps_gate($lat, $lng, 'check in')) return $err;
+    if ($err = gps_gate($lat, $lng, 'check in', $accuracy)) return $err;
 
     $now    = date('Y-m-d H:i:s');
     $status = calc_status(date('H:i:s'));
@@ -66,7 +87,7 @@ function do_check_in(int $userId, ?float $lat = null, ?float $lng = null): array
     return ['ok' => true, 'status' => $status, 'time' => $now];
 }
 
-function do_check_out(int $userId, ?float $lat = null, ?float $lng = null): array {
+function do_check_out(int $userId, ?float $lat = null, ?float $lng = null, ?float $accuracy = null): array {
     $record = get_today_record($userId);
     if (!$record) {
         return ['ok' => false, 'msg' => 'You have not checked in today.'];
@@ -74,7 +95,7 @@ function do_check_out(int $userId, ?float $lat = null, ?float $lng = null): arra
     if ($record['check_out_time']) {
         return ['ok' => false, 'msg' => 'You have already checked out today.'];
     }
-    if ($err = gps_gate($lat, $lng, 'check out')) return $err;
+    if ($err = gps_gate($lat, $lng, 'check out', $accuracy)) return $err;
 
     $now   = date('Y-m-d H:i:s');
     $hours = calc_work_hours($record['check_in_time'], $now);
@@ -225,9 +246,18 @@ function get_distance_from_office(float $lat, float $lng): float {
     return haversine($lat, $lng, $o['latitude'], $o['longitude']);
 }
 
-function is_within_office(float $lat, float $lng): bool {
+/**
+ * Check whether the given coordinates are within the office fence.
+ * Accepts optional GPS accuracy to add a buffer matching frontend logic.
+ */
+function is_within_office(float $lat, float $lng, ?float $accuracy = null): bool {
     $o = get_office_location();
-    return haversine($lat, $lng, $o['latitude'], $o['longitude']) <= $o['radius_m'];
+    $radius = $o['radius_m'];
+    // Apply same accuracy buffer as the frontend: radius + min(accuracy, 100m)
+    if ($accuracy !== null && $accuracy >= 0) {
+        $radius += min($accuracy, MAX_ACCURACY_BUFFER_M);
+    }
+    return haversine($lat, $lng, $o['latitude'], $o['longitude']) <= $radius;
 }
 
 /**
@@ -243,4 +273,3 @@ function get_current_status(int $userId): array {
     }
     return ['status' => 'checked_in', 'message' => 'Checked in', 'time' => $record['check_in_time']];
 }
-

@@ -34,6 +34,10 @@ define('OFFICE_LAT', -0.003496);
 define('OFFICE_LNG', 34.610503);
 define('OFFICE_NAME', 'ICT Department Service Desk (Siriba Branch)');
 
+// GPS accuracy thresholds (must stay in sync with employee/checkin.php JS)
+define('MAX_ACCURACY_BUFFER_M', 100);       // maximum added to office radius based on GPS accuracy
+define('MAX_ACCEPTABLE_ACCURACY_M', 200);   // fixes worse than this are rejected outright
+
 // App meta
 define('APP_NAME', 'AttendTrack');
 define('APP_VERSION', '1.0.0');

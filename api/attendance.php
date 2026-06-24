@@ -33,6 +33,7 @@ function read_coord(array $input, string $key): ?float {
 
 $lat = read_coord($input, 'lat');
 $lng = read_coord($input, 'lng');
+$accuracy = read_coord($input, 'accuracy');
 $uid = current_user_id();
 
 $isCheckIn = ($action === 'check_in');
@@ -52,19 +53,11 @@ if (GPS_REQUIRED) {
         echo json_encode(['ok' => false, 'msg' => 'Invalid GPS coordinates received.']);
         exit;
     }
-    if (!is_within_office($lat, $lng)) {
-        $dist = get_distance_from_office($lat, $lng);
-        echo json_encode([
-            'ok'  => false,
-            'msg' => "You are not within the office location (you are ~" . number_format($dist) . " m away). {$label} not allowed.",
-        ]);
-        exit;
-    }
 }
 
 $result = match($action) {
-    'check_in'  => do_check_in($uid, $lat, $lng),
-    'check_out' => do_check_out($uid, $lat, $lng),
+    'check_in'  => do_check_in($uid, $lat, $lng, $accuracy),
+    'check_out' => do_check_out($uid, $lat, $lng, $accuracy),
     default     => ['ok' => false, 'msg' => 'Invalid action.']
 };
 
