@@ -6,6 +6,9 @@ require_once __DIR__ . '/db.php';
 // Harden session
 ini_set('session.cookie_httponly', 1);
 ini_set('session.use_strict_mode', 1);
+ini_set('session.cookie_samesite', 'Lax');
+ini_set('session.cookie_secure', 0); // Set to 1 if you enable HTTPS
+ini_set('session.use_only_cookies', 1);
 if (!isset($_SESSION)) session_start();
 
 // ─── Core helpers ───────────────────────────────────────────

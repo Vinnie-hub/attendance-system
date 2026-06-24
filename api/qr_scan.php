@@ -20,7 +20,8 @@ if (!hash_equals($expected, $token)) {
     die('<h3>QR code expired or invalid.</h3>');
 }
 
-$result = ($action === 'check_in') ? do_check_in($uid) : do_check_out($uid);
+// QR code attendance still validates GPS if enabled (accuracy is N/A for QR scans)
+$result = ($action === 'check_in') ? do_check_in($uid, null, null, null) : do_check_out($uid, null, null, null);
 
 header('Location: ' . BASE_URL . '/employee/checkin.php?qr=' . ($result['ok'] ? 'ok' : 'err') . '&msg=' . urlencode($result['msg'] ?? ''));
 exit;

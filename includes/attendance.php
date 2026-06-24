@@ -103,7 +103,7 @@ function do_check_out(int $userId, ?float $lat = null, ?float $lng = null, ?floa
     $status = $record['status'];
     if ($hours !== null) {
         if ($hours < 4)        $status = 'half_day';
-        elseif ($hours >= 8)   $status = 'full_day';
+        elseif ($hours >= 8 && $status !== 'late')   $status = 'full_day';
     }
 
     db_query(
@@ -164,7 +164,7 @@ function get_summary_stats(int $userId, string $month): array {
 
     $stmt = db_query(
         'SELECT
-            COUNT(*) AS total_days,
+            SUM(CASE WHEN status != "absent" THEN 1 ELSE 0 END) AS total_days,
             SUM(CASE WHEN status = "on_time" THEN 1 ELSE 0 END) AS on_time,
             SUM(CASE WHEN status = "late" THEN 1 ELSE 0 END) AS late,
             SUM(CASE WHEN status = "absent" THEN 1 ELSE 0 END) AS absent,

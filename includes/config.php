@@ -25,7 +25,7 @@ define('DB_CHARSET', 'utf8mb4');
 // Work schedule (mirrors work_schedule table default row)
 define('WORK_START', '08:00');
 define('WORK_END', '17:00');
-define('GRACE_MINUTES', 30);
+define('GRACE_MINUTES', 15);
 
 // GPS – default office location (Siriba Campus, Maseno)
 define('GPS_REQUIRED', true);

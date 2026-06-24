@@ -154,23 +154,46 @@ function getOnePosition(opts) {
 /**
  * Take up to N samples and return the one with the smallest accuracy circle.
  * Short-circuits as soon as we get a fix accurate to <= 30 m.
+ * Uses a two-phase strategy:
+ *   Phase 1 – high accuracy (for phones with real GPS) — 1 sample, fast timeout.
+ *   Phase 2 – standard accuracy (WiFi/cell/IP for laptops without GPS) — 1 sample.
  */
-async function getBestPosition({ samples = 4, perSampleTimeout = 8000 } = {}) {
+async function getBestPosition() {
   let best = null;
-  for (let i = 0; i < samples; i++) {
-    try {
-      const pos = await getOnePosition({
-        enableHighAccuracy: true,
-        timeout: perSampleTimeout,
-        maximumAge: 0,
-      });
-      const acc = pos.coords.accuracy || 9999;
-      if (!best || acc < best.coords.accuracy) best = pos;
-      if (acc <= 30) break; // good enough, stop polling
-    } catch (e) {
-      if (!best && i === samples - 1) throw e;
+
+  // Phase 1: high accuracy (works on phones with GPS chip, often fails on desktops)
+  try {
+    const pos = await getOnePosition({
+      enableHighAccuracy: true,
+      timeout: 8000,
+      maximumAge: 0,
+    });
+    const acc = pos.coords.accuracy || 9999;
+    if (acc <= MAX_ACCEPTABLE_ACCURACY_M) {
+      // Good enough — use this immediately
+      return pos;
     }
+    // Accuracy too poor but better than nothing — keep as fallback
+    best = pos;
+  } catch (e) {
+    // Timeout or error — desktop without GPS, expected
   }
+
+  // Phase 2: standard accuracy (WiFi / IP geolocation, works everywhere)
+  try {
+    const pos = await getOnePosition({
+      enableHighAccuracy: false,
+      timeout: 8000,
+      maximumAge: 0,
+    });
+    const acc = pos.coords.accuracy || 9999;
+    if (!best || acc < (best.coords.accuracy || 9999)) {
+      best = pos;
+    }
+  } catch (e) {
+    if (!best) throw e; // both phases failed
+  }
+
   if (!best) throw new Error('Could not obtain a GPS fix.');
   return best;
 }
@@ -223,7 +246,7 @@ function showGpsError(err) {
 
 async function detectGPS() {
   try {
-    const pos = await getBestPosition({ samples: 3 });
+    const pos = await getBestPosition();
     bestFix = {
       lat: pos.coords.latitude,
       lng: pos.coords.longitude,
@@ -243,9 +266,18 @@ async function doAction(action) {
   if (btn) { btn.disabled = true; }
   try {
     // Always re-acquire at click time so we send the freshest, most accurate fix.
+    // Reset the pill to 'detecting' state so the user sees fresh feedback.
+    const pill = document.getElementById('gpsPill');
+    const distEl = document.getElementById('gpsDistance');
+    if (pill) {
+      pill.className = 'location-pill warn';
+      pill.innerHTML = '<i class=\"bi bi-geo-alt-fill\"></i> Getting fresh location\u2026';
+    }
+    if (distEl) { distEl.style.display = 'none'; }
+
     let fix;
     try {
-      const pos = await getBestPosition({ samples: 4 });
+      const pos = await getBestPosition();
       fix = {
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,

@@ -9,13 +9,13 @@ $pageTitle = 'Attendance Reports';
 $activeNav = 'rep';
 $db        = DB::get();
 
-$month     = $_GET['month'] ?? date('Y-m');
+$month     = preg_match('/^\d{4}-\d{2}$/', $_GET['month'] ?? '') ? $_GET['month'] : date('Y-m');
 $from      = $month . '-01';
 $to        = date('Y-m-t', strtotime($from));
 $monthName = date('F Y', strtotime($from));
 
 // Per-employee summary for the month
-$empStats = $db->query(
+$empStats = $db->prepare(
     "SELECT u.id, u.full_name, u.department,
         COUNT(a.id)                          AS days_present,
         SUM(a.status='on_time')              AS on_time,
@@ -25,19 +25,23 @@ $empStats = $db->query(
         ROUND(AVG(a.work_hours),2)           AS avg_hours,
         ROUND(SUM(a.work_hours),2)           AS total_hours
      FROM users u
-     LEFT JOIN attendance a ON a.user_id = u.id AND a.attendance_date BETWEEN '$from' AND '$to'
+     LEFT JOIN attendance a ON a.user_id = u.id AND a.attendance_date BETWEEN ? AND ?
      WHERE u.role='employee' AND u.is_active=1
      GROUP BY u.id
      ORDER BY u.full_name"
-)->fetchAll();
+);
+$empStats->execute([$from, $to]);
+$empStats = $empStats->fetchAll();
 
 // Daily totals for bar chart
-$dailyRows = $db->query(
+$dailyStmt = $db->prepare(
     "SELECT attendance_date, COUNT(*) AS cnt,
         SUM(status='on_time') AS on_time, SUM(status='late') AS late
-     FROM attendance WHERE attendance_date BETWEEN '$from' AND '$to'
+     FROM attendance WHERE attendance_date BETWEEN ? AND ?
      GROUP BY attendance_date ORDER BY attendance_date"
-)->fetchAll();
+);
+$dailyStmt->execute([$from, $to]);
+$dailyRows = $dailyStmt->fetchAll();
 
 $chartLabels = $chartPresent = $chartLate = [];
 foreach ($dailyRows as $d) {
@@ -100,7 +104,15 @@ include __DIR__ . '/../includes/header.php';
               <tr><td colspan="10" class="text-center text-muted py-4">No data for this month.</td></tr>
             <?php else: ?>
               <?php foreach ($empStats as $e):
-                $workDays  = 22; // approximate working days in a month
+                // Calculate actual working days (weekdays) in the selected month
+                $workDays = 0;
+                $dt = new DateTime($from);
+                $end = new DateTime($to);
+                while ($dt <= $end) {
+                    $dow = (int)$dt->format('N'); // 1=Mon .. 7=Sun
+                    if ($dow <= 5) $workDays++; // Mon-Fri
+                    $dt->modify('+1 day');
+                }
                 $rate      = $e['days_present'] > 0 ? round(($e['days_present']/$workDays)*100, 0) : 0;
                 $rateColor = $rate >= 90 ? 'success' : ($rate >= 75 ? 'warning' : 'danger');
               ?>
