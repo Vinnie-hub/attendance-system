@@ -6,18 +6,13 @@ require_once __DIR__ . '/config.php';
 
 // ─── Status helpers ──────────────────────────────────────────
 
-/**
- * Determine status from check-in time string (H:i or H:i:s).
- */
 function calc_status(string $checkInTime): string {
     $in     = strtotime($checkInTime);
     $cutoff = strtotime(WORK_START . ':00') + (GRACE_MINUTES * 60);
     return ($in <= $cutoff) ? 'on_time' : 'late';
 }
 
-/**
- * Compute work hours between two DATETIME strings.
- */
+
 function calc_work_hours(?string $checkIn, ?string $checkOut): ?float {
     if (!$checkIn || !$checkOut) return null;
     $diff = strtotime($checkOut) - strtotime($checkIn);
@@ -34,60 +29,100 @@ function get_today_record(int $userId): array|false {
     return $stmt->fetch();
 }
 
-/**
- * Shared GPS gate: returns null when allowed, or an error array when the
- * supplied coordinates are outside the office fence.
- * Accepts optional GPS accuracy to apply a buffer matching the frontend logic.
- */
-function gps_gate(?float $lat, ?float $lng, string $action, ?float $accuracy = null): ?array {
-    if ($lat === null || $lng === null) return null; // legacy callers without GPS
+
+function gps_gate(?float $lat, ?float $lng, string $action, ?float $accuracy = null, ?string $method = 'gps'): ?array {
+    // If GPS is optional and method is not GPS, skip GPS-specific validation
+    if (GPS_OPTIONAL && $method !== 'gps' && $method !== 'qr') {
+        // For WiFi/manual methods, just check geofence (no accuracy requirement)
+        if ($lat === null || $lng === null) return null;
+        
+        $office = get_office_location();
+        $dist = haversine($lat, $lng, $office['latitude'], $office['longitude']);
+        
+        if ($dist <= $office['radius_m']) {
+            return null;
+        }
+        
+        return [
+            'ok' => false,
+            'msg' => "You are not within the {$office['name']} office radius "
+                   . "(you are ~" . number_format($dist) . " m away; allowed "
+                   . number_format($office['radius_m']) . " m). Please move closer to {$action}.",
+            'distance_m' => $dist,
+            'method' => $method,
+        ];
+    }
+    
+    // Original strict GPS validation (when GPS_REQUIRED or method is GPS/QR)
+    if ($lat === null || $lng === null) return null;
 
     $office = get_office_location();
 
-    // Reject obviously bad fixes (likely IP geolocation, not real GPS).
-    if ($accuracy !== null && $accuracy > MAX_ACCEPTABLE_ACCURACY_M) {
-        return [
-            'ok'  => false,
-            'msg' => "Your GPS fix is too imprecise (±" . round($accuracy) . " m). "
-                   . "Move outside or near a window, wait a few seconds, and try again.",
-        ];
-    }
-
-    // Effective radius = office radius + accuracy buffer (cap the buffer so
-    // a noisy fix can't grant unlimited slack).
+  
     $buffer  = $accuracy !== null ? min($accuracy, MAX_ACCURACY_BUFFER_M) : 0.0;
     $dist    = haversine($lat, $lng, $office['latitude'], $office['longitude']);
     $allowed = (float)$office['radius_m'] + $buffer;
 
     if ($dist <= $allowed) return null;
 
+    // Only hard-block on poor accuracy when the user is *also* outside.
+    if ($accuracy !== null && $accuracy > MAX_ACCEPTABLE_ACCURACY_M) {
+        return [
+            'ok'  => false,
+            'msg' => "Your GPS signal is weak (±" . round($accuracy) . " m) and you appear to be "
+                   . "~" . number_format($dist) . " m away from the office. "
+                   . "Move outside or near a window, wait a few seconds, and try again.",
+            'accuracy_m' => $accuracy,
+            'distance_m' => $dist,
+            'method'     => $method,
+        ];
+    }
+
     return [
         'ok'  => false,
         'msg' => "You are not within the {$office['name']} office radius "
                . "(you are ~" . number_format($dist) . " m away; allowed "
                . number_format($allowed) . " m). Please move closer to {$action}.",
+        'distance_m' => $dist,
+        'method' => $method,
     ];
 }
 
-function do_check_in(int $userId, ?float $lat = null, ?float $lng = null, ?float $accuracy = null): array {
+function do_check_in(int $userId, ?float $lat = null, ?float $lng = null, ?float $accuracy = null, ?string $method = 'gps'): array {
     if (get_today_record($userId)) {
         return ['ok' => false, 'msg' => 'You have already checked in today.'];
     }
-    if ($err = gps_gate($lat, $lng, 'check in', $accuracy)) return $err;
+    if ($err = gps_gate($lat, $lng, 'check in', $accuracy, $method)) return $err;
 
     $now    = date('Y-m-d H:i:s');
     $status = calc_status(date('H:i:s'));
+    
+    // Create audit record
+    $auditId = null;
+    if ($lat !== null && $lng !== null) {
+        $office = get_office_location();
+        $distance = haversine($lat, $lng, $office['latitude'], $office['longitude']);
+        $isWithinGeofence = $distance <= ($office['radius_m'] + (min($accuracy ?? 0, MAX_ACCURACY_BUFFER_M)));
+        
+        db_query(
+            'INSERT INTO geolocation_audit (user_id, action, geolocation_method, latitude, longitude, accuracy_m, distance_m, is_within_geofence)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [$userId, 'check_in', $method, $lat, $lng, $accuracy, $distance, $isWithinGeofence ? 1 : 0]
+        );
+        
+        $auditId = db_query('SELECT LAST_INSERT_ID() as id')->fetch()['id'];
+    }
 
     db_query(
-        'INSERT INTO attendance (user_id, attendance_date, check_in_time, check_in_lat, check_in_lng, status)
-         VALUES (?, CURDATE(), ?, ?, ?, ?)',
-        [$userId, $now, $lat, $lng, $status]
+        'INSERT INTO attendance (user_id, attendance_date, check_in_time, check_in_lat, check_in_lng, status, geolocation_method, gps_accuracy_m, audit_id)
+         VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?)',
+        [$userId, $now, $lat, $lng, $status, $method, $accuracy, $auditId]
     );
 
-    return ['ok' => true, 'status' => $status, 'time' => $now];
+    return ['ok' => true, 'status' => $status, 'time' => $now, 'method' => $method];
 }
 
-function do_check_out(int $userId, ?float $lat = null, ?float $lng = null, ?float $accuracy = null): array {
+function do_check_out(int $userId, ?float $lat = null, ?float $lng = null, ?float $accuracy = null, ?string $method = 'gps'): array {
     $record = get_today_record($userId);
     if (!$record) {
         return ['ok' => false, 'msg' => 'You have not checked in today.'];
@@ -95,7 +130,7 @@ function do_check_out(int $userId, ?float $lat = null, ?float $lng = null, ?floa
     if ($record['check_out_time']) {
         return ['ok' => false, 'msg' => 'You have already checked out today.'];
     }
-    if ($err = gps_gate($lat, $lng, 'check out', $accuracy)) return $err;
+    if ($err = gps_gate($lat, $lng, 'check out', $accuracy, $method)) return $err;
 
     $now   = date('Y-m-d H:i:s');
     $hours = calc_work_hours($record['check_in_time'], $now);
@@ -105,16 +140,32 @@ function do_check_out(int $userId, ?float $lat = null, ?float $lng = null, ?floa
         if ($hours < 4)        $status = 'half_day';
         elseif ($hours >= 8 && $status !== 'late')   $status = 'full_day';
     }
+    
+    // Create audit record for check-out
+    $auditId = null;
+    if ($lat !== null && $lng !== null) {
+        $office = get_office_location();
+        $distance = haversine($lat, $lng, $office['latitude'], $office['longitude']);
+        $isWithinGeofence = $distance <= ($office['radius_m'] + (min($accuracy ?? 0, MAX_ACCURACY_BUFFER_M)));
+        
+        db_query(
+            'INSERT INTO geolocation_audit (user_id, action, geolocation_method, latitude, longitude, accuracy_m, distance_m, is_within_geofence)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [$userId, 'check_out', $method, $lat, $lng, $accuracy, $distance, $isWithinGeofence ? 1 : 0]
+        );
+        
+        $auditId = db_query('SELECT LAST_INSERT_ID() as id')->fetch()['id'];
+    }
 
     db_query(
         'UPDATE attendance
             SET check_out_time = ?, check_out_lat = ?, check_out_lng = ?,
-                work_hours = ?, status = ?
+                work_hours = ?, status = ?, geolocation_method = ?, gps_accuracy_m = ?, audit_id = ?
           WHERE id = ?',
-        [$now, $lat, $lng, $hours, $status, $record['id']]
+        [$now, $lat, $lng, $hours, $status, $method, $accuracy, $auditId, $record['id']]
     );
 
-    return ['ok' => true, 'hours' => $hours, 'time' => $now];
+    return ['ok' => true, 'hours' => $hours, 'time' => $now, 'method' => $method];
 }
 
 // ─── Reporting helpers ────────────────────────────────────────
@@ -204,10 +255,7 @@ function haversine(float $lat1, float $lng1, float $lat2, float $lng2): float {
     return round($R * 2 * asin(sqrt($a)), 2);
 }
 
-/**
- * Active office fence (DB row, or config fallback). Cached per request so
- * is_within_office / get_distance_from_office / get_office_name share one query.
- */
+
 function get_office_location(): array {
     static $cache = null;
     if ($cache !== null) return $cache;
@@ -246,10 +294,7 @@ function get_distance_from_office(float $lat, float $lng): float {
     return haversine($lat, $lng, $o['latitude'], $o['longitude']);
 }
 
-/**
- * Check whether the given coordinates are within the office fence.
- * Accepts optional GPS accuracy to add a buffer matching frontend logic.
- */
+
 function is_within_office(float $lat, float $lng, ?float $accuracy = null): bool {
     $o = get_office_location();
     $radius = $o['radius_m'];
@@ -260,9 +305,7 @@ function is_within_office(float $lat, float $lng, ?float $accuracy = null): bool
     return haversine($lat, $lng, $o['latitude'], $o['longitude']) <= $radius;
 }
 
-/**
- * Get the user's current status (checked in or out)
- */
+
 function get_current_status(int $userId): array {
     $record = get_today_record($userId);
     if (!$record) {
@@ -272,4 +315,93 @@ function get_current_status(int $userId): array {
         return ['status' => 'checked_out', 'message' => 'Checked out', 'hours' => $record['work_hours']];
     }
     return ['status' => 'checked_in', 'message' => 'Checked in', 'time' => $record['check_in_time']];
+}
+
+/**
+ * Generate a time-limited admin approval token for a user.
+ *
+ * @param int $userId          User attempting check-in/out
+ * @param int $adminId         Admin approving the check-in
+ * @param string $action       'check_in' or 'check_out'
+ * @return array               {token: string, expires_at: string}
+ */
+function generate_admin_approval_token(int $userId, int $adminId, string $action = 'check_in'): array {
+    $token = bin2hex(random_bytes(32));
+    $expiresAt = date('Y-m-d H:i:s', time() + (ADMIN_APPROVAL_TOKEN_EXPIRY_MINUTES * 60));
+    
+    db_query(
+        'INSERT INTO admin_approval_tokens (user_id, admin_id, token, action, expires_at)
+         VALUES (?, ?, ?, ?, ?)',
+        [$userId, $adminId, $token, $action, $expiresAt]
+    );
+    
+    return [
+        'ok' => true,
+        'token' => $token,
+        'expires_at' => $expiresAt,
+        'expires_in_minutes' => ADMIN_APPROVAL_TOKEN_EXPIRY_MINUTES
+    ];
+}
+
+/**
+ * Validate and consume an admin approval token.
+ *
+ * @param string $token       The approval token
+ * @param int $userId         The user claiming to use this token
+ * @param string $action      'check_in' or 'check_out'
+ * @return array              {ok: bool, msg: string, admin_id: ?int}
+ */
+function validate_admin_approval_token(string $token, int $userId, string $action = 'check_in'): array {
+    try {
+        $stmt = db_query(
+            'SELECT id, admin_id FROM admin_approval_tokens
+             WHERE token = ? AND user_id = ? AND action = ? AND is_used = 0 AND expires_at > NOW()
+             LIMIT 1',
+            [$token, $userId, $action]
+        );
+        
+        $tokenRecord = $stmt->fetch();
+        if (!$tokenRecord) {
+            return ['ok' => false, 'msg' => 'Invalid or expired approval token.', 'admin_id' => null];
+        }
+        
+        // Mark token as used
+        db_query(
+            'UPDATE admin_approval_tokens SET is_used = 1, used_at = NOW() WHERE id = ?',
+            [$tokenRecord['id']]
+        );
+        
+        return ['ok' => true, 'msg' => 'Approval token validated.', 'admin_id' => (int)$tokenRecord['admin_id']];
+    } catch (Throwable $e) {
+        return ['ok' => false, 'msg' => 'Error validating approval token: ' . $e->getMessage(), 'admin_id' => null];
+    }
+}
+
+/**
+ * Check if user has a pending (unused, non-expired) approval token.
+ *
+ * @param int $userId  The user
+ * @param string $action  'check_in' or 'check_out'
+ * @return array       {has_pending: bool, expires_in_seconds: ?int}
+ */
+function check_pending_approval_token(int $userId, string $action = 'check_in'): array {
+    try {
+        $stmt = db_query(
+            'SELECT UNIX_TIMESTAMP(expires_at) - UNIX_TIMESTAMP(NOW()) as expires_in
+             FROM admin_approval_tokens
+             WHERE user_id = ? AND action = ? AND is_used = 0 AND expires_at > NOW()
+             ORDER BY created_at DESC
+             LIMIT 1',
+            [$userId, $action]
+        );
+        
+        $result = $stmt->fetch();
+        if ($result) {
+            return ['has_pending' => true, 'expires_in_seconds' => max(0, (int)$result['expires_in'])];
+        }
+        
+        return ['has_pending' => false, 'expires_in_seconds' => null];
+    } catch (Throwable $e) {
+        return ['has_pending' => false, 'expires_in_seconds' => null];
+    }
 }

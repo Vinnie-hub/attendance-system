@@ -31,24 +31,82 @@ function read_coord(array $input, string $key): ?float {
     return (float)$raw;
 }
 
+/**
+ * Read a string parameter from JSON or POST
+ */
+function read_string(array $input, string $key, ?string $default = null): ?string {
+    $raw = $input[$key] ?? $_POST[$key] ?? $default;
+    return $raw ? (string)$raw : $default;
+}
+
 $lat = read_coord($input, 'lat');
 $lng = read_coord($input, 'lng');
 $accuracy = read_coord($input, 'accuracy');
+$method = read_string($input, 'method', 'gps');
+$adminToken = read_string($input, 'admin_override_token');
 $uid = current_user_id();
 
 $isCheckIn = ($action === 'check_in');
 $label     = $isCheckIn ? 'check-in' : 'check-out';
 
-// GPS check (when enabled, coordinates are mandatory)
-if (GPS_REQUIRED) {
-    if ($lat === null || $lng === null) {
-        echo json_encode([
-            'ok'  => false,
-            'msg' => "GPS coordinates are required for {$label}. Please enable location access and try again.",
-        ]);
-        exit;
+// Validate geolocation method
+if (!in_array($method, ['gps', 'wifi', 'manual', 'qr'], true)) {
+    echo json_encode([
+        'ok'  => false,
+        'msg' => 'Invalid geolocation method.',
+    ]);
+    exit;
+}
+
+// Handle admin override for WiFi/manual methods
+if ($method === 'wifi' || $method === 'manual') {
+    if (ADMIN_APPROVAL_REQUIRED_FOR_FALLBACK) {
+        if (!$adminToken) {
+            echo json_encode([
+                'ok'  => false,
+                'msg' => 'Admin approval required for ' . $method . ' check-in. Request an approval code from your administrator.',
+                'requires_admin_approval' => true,
+                'method' => $method,
+            ]);
+            exit;
+        }
+        
+        // Validate admin token
+        $tokenValidation = validate_admin_approval_token($adminToken, $uid, $action);
+        if (!$tokenValidation['ok']) {
+            echo json_encode([
+                'ok'  => false,
+                'msg' => $tokenValidation['msg'],
+                'requires_admin_approval' => true,
+                'method' => $method,
+            ]);
+            exit;
+        }
     }
-    // Range sanity check
+}
+
+// GPS check (when GPS_REQUIRED and method is gps/qr)
+if (($method === 'gps' || $method === 'qr') && ($lat === null || $lng === null)) {
+    echo json_encode([
+        'ok'  => false,
+        'msg' => "GPS coordinates are required for {$label}. Please enable location access and try again.",
+        'method' => $method,
+    ]);
+    exit;
+}
+
+// WiFi/manual methods also require coordinates
+if (($method === 'wifi' || $method === 'manual') && ($lat === null || $lng === null)) {
+    echo json_encode([
+        'ok'  => false,
+        'msg' => "Location coordinates are required for {$label}.",
+        'method' => $method,
+    ]);
+    exit;
+}
+
+// Range sanity check (if coordinates provided)
+if ($lat !== null && $lng !== null) {
     if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) {
         echo json_encode(['ok' => false, 'msg' => 'Invalid GPS coordinates received.']);
         exit;
@@ -56,8 +114,8 @@ if (GPS_REQUIRED) {
 }
 
 $result = match($action) {
-    'check_in'  => do_check_in($uid, $lat, $lng, $accuracy),
-    'check_out' => do_check_out($uid, $lat, $lng, $accuracy),
+    'check_in'  => do_check_in($uid, $lat, $lng, $accuracy, $method),
+    'check_out' => do_check_out($uid, $lat, $lng, $accuracy, $method),
     default     => ['ok' => false, 'msg' => 'Invalid action.']
 };
 
