@@ -1,18 +1,4 @@
 <?php
-/**
- * fix_office_location.php — Database Repair Tool
- * 
- * Fixes the office_location coordinates AND creates any missing tables
- * (geolocation_audit, admin_approval_tokens) on the live server.
- * 
- * HOW TO USE:
- *   1. Upload this file to your live server root (where index.php is)
- *   2. Access via browser: https://yourdomain.com/fix_office_location.php
- *   3. It will fix everything automatically
- *   4. DELETE this file after running it (⚠ SECURITY RISK if left on server)
- * 
- * Correct coordinates: -0.002704, 34.608207 (ICT Department, Siriba Campus)
- */
 
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/db.php';

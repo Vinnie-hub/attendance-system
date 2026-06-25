@@ -403,10 +403,28 @@ var GeoLocationService = (function () {
       xhr.onreadystatechange = function () {
         if (xhr.readyState !== 4) return;
 
+        var responseText = (xhr.responseText || '').trim();
+
+        // Check for non-JSON response (e.g. HTML error page, authentication page)
+        if (responseText.length > 0 && responseText.charAt(0) !== '{' && responseText.charAt(0) !== '[') {
+          // Not JSON — likely an HTML error or redirect page.
+          // Extract a useful preview for debugging but don't crash.
+          var preview = responseText.substring(0, 200).replace(/\s+/g, ' ').trim();
+          reject(createError(
+            'Geolocation service returned non-JSON response: "' + preview + '..."',
+            'invalid_response'
+          ));
+          return;
+        }
+
+        var data;
         try {
-          var data = JSON.parse(xhr.responseText);
+          data = JSON.parse(responseText);
         } catch (e) {
-          reject(createError('Invalid response from geolocation service.', 'parse_error'));
+          reject(createError(
+            'Geolocation service returned unparseable response: ' + e.message,
+            'parse_error'
+          ));
           return;
         }
 
@@ -423,7 +441,6 @@ var GeoLocationService = (function () {
           reject(createError(msg, 'service_error'));
         }
       };
-
       xhr.onerror = function () {
         reject(createError('Network error contacting geolocation service.', 'network_error'));
       };

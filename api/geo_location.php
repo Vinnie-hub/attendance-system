@@ -61,6 +61,17 @@ set_exception_handler(function (Throwable $e) {
 header('Content-Type: application/json');
 
 require_once __DIR__ . '/../includes/config.php';
+require_once __DIR__ . '/../includes/auth.php';
+
+// Require authentication (must be logged in to use this API)
+if (!is_logged_in()) {
+    echo json_encode([
+        'ok'       => false,
+        'msg'      => 'Authentication required. Please log in first.',
+        'fallback' => true,
+    ]);
+    exit;
+}
 
 // Check if Google Geolocation API is enabled
 if (!defined('GOOGLE_API_KEY') || !GOOGLE_API_KEY) {
