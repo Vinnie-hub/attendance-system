@@ -5,6 +5,11 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="<?= BASE_URL ?>/assets/js/app.js"></script>
+<?php if (!empty($extraScripts) && is_array($extraScripts)): ?>
+  <?php foreach ($extraScripts as $scriptUrl): ?>
+    <script src="<?= htmlspecialchars($scriptUrl) ?>"></script>
+  <?php endforeach; ?>
+<?php endif; ?>
 <?php if (!empty($extraJs)): ?>
   <script><?= $extraJs ?></script>
 <?php endif; ?>

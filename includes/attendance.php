@@ -97,20 +97,24 @@ function do_check_in(int $userId, ?float $lat = null, ?float $lng = null, ?float
     $now    = date('Y-m-d H:i:s');
     $status = calc_status(date('H:i:s'));
     
-    // Create audit record
+    // Create audit record (gracefully handle missing table)
     $auditId = null;
     if ($lat !== null && $lng !== null) {
         $office = get_office_location();
         $distance = haversine($lat, $lng, $office['latitude'], $office['longitude']);
         $isWithinGeofence = $distance <= ($office['radius_m'] + (min($accuracy ?? 0, MAX_ACCURACY_BUFFER_M)));
         
-        db_query(
-            'INSERT INTO geolocation_audit (user_id, action, geolocation_method, latitude, longitude, accuracy_m, distance_m, is_within_geofence)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            [$userId, 'check_in', $method, $lat, $lng, $accuracy, $distance, $isWithinGeofence ? 1 : 0]
-        );
-        
-        $auditId = db_query('SELECT LAST_INSERT_ID() as id')->fetch()['id'];
+        try {
+            db_query(
+                'INSERT INTO geolocation_audit (user_id, action, geolocation_method, latitude, longitude, accuracy_m, distance_m, is_within_geofence)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                [$userId, 'check_in', $method, $lat, $lng, $accuracy, $distance, $isWithinGeofence ? 1 : 0]
+            );
+            $auditId = db_query('SELECT LAST_INSERT_ID() as id')->fetch()['id'];
+        } catch (Throwable $e) {
+            // Table may not exist — skip audit logging; check-in still works
+            $auditId = null;
+        }
     }
 
     db_query(
@@ -141,20 +145,24 @@ function do_check_out(int $userId, ?float $lat = null, ?float $lng = null, ?floa
         elseif ($hours >= 8 && $status !== 'late')   $status = 'full_day';
     }
     
-    // Create audit record for check-out
+    // Create audit record for check-out (gracefully handle missing table)
     $auditId = null;
     if ($lat !== null && $lng !== null) {
         $office = get_office_location();
         $distance = haversine($lat, $lng, $office['latitude'], $office['longitude']);
         $isWithinGeofence = $distance <= ($office['radius_m'] + (min($accuracy ?? 0, MAX_ACCURACY_BUFFER_M)));
         
-        db_query(
-            'INSERT INTO geolocation_audit (user_id, action, geolocation_method, latitude, longitude, accuracy_m, distance_m, is_within_geofence)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            [$userId, 'check_out', $method, $lat, $lng, $accuracy, $distance, $isWithinGeofence ? 1 : 0]
-        );
-        
-        $auditId = db_query('SELECT LAST_INSERT_ID() as id')->fetch()['id'];
+        try {
+            db_query(
+                'INSERT INTO geolocation_audit (user_id, action, geolocation_method, latitude, longitude, accuracy_m, distance_m, is_within_geofence)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                [$userId, 'check_out', $method, $lat, $lng, $accuracy, $distance, $isWithinGeofence ? 1 : 0]
+            );
+            $auditId = db_query('SELECT LAST_INSERT_ID() as id')->fetch()['id'];
+        } catch (Throwable $e) {
+            // Table may not exist — skip audit logging; check-out still works
+            $auditId = null;
+        }
     }
 
     db_query(

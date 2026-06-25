@@ -1,5 +1,36 @@
 <?php
 // api/attendance.php  – JSON API for check-in / check-out
+
+// Ensure any PHP error is caught and returned as JSON instead of breaking the response
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
+error_reporting(E_ALL);
+
+// Catch fatal errors and return them as JSON
+register_shutdown_function(function () {
+    $error = error_get_last();
+    if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
+        header('Content-Type: application/json');
+        echo json_encode([
+            'ok' => false,
+            'msg' => 'Server error: ' . $error['message'] . ' in ' . $error['file'] . ' on line ' . $error['line'],
+            'error_type' => 'fatal'
+        ]);
+        exit;
+    }
+});
+
+// Custom exception handler to return JSON for uncaught exceptions
+set_exception_handler(function (Throwable $e) {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'ok' => false,
+        'msg' => 'Server error: ' . $e->getMessage(),
+        'error_type' => 'exception'
+    ]);
+    exit;
+});
+
 header('Content-Type: application/json');
 
 require_once __DIR__ . '/../includes/auth.php';

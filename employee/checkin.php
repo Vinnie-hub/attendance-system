@@ -20,6 +20,9 @@ $qrUrlOut = BASE_URL . '/api/qr_scan.php?token=' . $qrToken . '&action=check_out
 $qrStatus = $_GET['qr']  ?? '';
 $qrMsg    = $_GET['msg'] ?? '';
 
+// Determine the Google Geolocation API endpoint for the frontend
+$googleGeoApiUrl = BASE_URL . '/api/geo_location.php';
+
 // PHP → JS config values (safe JSON encoding avoids any escaping issues)
 $jsConfig = json_encode([
     'baseUrl'                => BASE_URL,
@@ -35,6 +38,9 @@ $jsConfig = json_encode([
     'adminApprovalRequired'  => (bool)ADMIN_APPROVAL_REQUIRED_FOR_FALLBACK,
     'qrUrlIn'                => $qrUrlIn,
     'qrUrlOut'               => $qrUrlOut,
+    // Google Geolocation API config
+    'googleGeoApiUrl'        => $googleGeoApiUrl,
+    'googleApiEnabled'       => defined('GOOGLE_GEO_API_ENABLED') && GOOGLE_GEO_API_ENABLED && defined('GOOGLE_API_KEY') && GOOGLE_API_KEY,
 ]);
 
 include __DIR__ . '/../includes/header.php';
@@ -151,6 +157,9 @@ include __DIR__ . '/../includes/header.php';
 </div>
 
 <?php
+// Load the independent geo-location service module
+$extraScripts = [BASE_URL . '/assets/js/geo-location-service.js'];
+
 // Pass all PHP config to JS via a single safe JSON object — no manual escaping needed
 $extraJs = 'const CFG = ' . $jsConfig . ';' . file_get_contents(__DIR__ . '/../assets/js/checkin.js');
 include __DIR__ . '/../includes/footer.php';

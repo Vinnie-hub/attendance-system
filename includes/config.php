@@ -27,15 +27,19 @@ define('WORK_START', '08:00');
 define('WORK_END', '17:00');
 define('GRACE_MINUTES', 15);
 
-// GPS – default office location (Siriba Campus, Maseno)
+// Google Geolocation API (for precise location via WiFi/cell-tower fingerprinting)
+define('GOOGLE_API_KEY', '');              // Set your Google API key (with Geolocation API enabled)
+define('GOOGLE_GEO_API_ENABLED', true);    // Set to false to disable Google Geolocation API
+
+// GPS – default office location (ICT Department Service Desk, Siriba Campus)
 define('GPS_OPTIONAL', true);                           // Allow WiFi/manual fallback when GPS fails
 define('WIFI_FALLBACK_ENABLED', true);                  // Use IP/WiFi geolocation as fallback
 define('ADMIN_APPROVAL_REQUIRED_FOR_FALLBACK', false);  // Require admin token for WiFi/manual check-ins (set to true for strict enforcement)
 define('ADMIN_APPROVAL_TOKEN_EXPIRY_MINUTES', 5);      // Token validity period
 
 define('GPS_RADIUS_M', 700);
-define('OFFICE_LAT', -0.003496);
-define('OFFICE_LNG', 34.610503);
+define('OFFICE_LAT', -0.002704);
+define('OFFICE_LNG', 34.608207);
 define('OFFICE_NAME', 'ICT Department Service Desk (Siriba Branch)');
 
 // GPS accuracy thresholds (must stay in sync with employee/checkin.php JS)

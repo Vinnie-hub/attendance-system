@@ -11,6 +11,7 @@ let currentAccuracy = null;
 let locationFixed = false;
 let pendingAction = null;   // 'check_in' | 'check_out' | null
 let processing = false;
+let googlePositionUsed = false; // Track whether we got an initial fix from Google API
 
 // ── DOM refs ───────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -28,6 +29,57 @@ function startGPS() {
   }
 
   updateGPSSpill('warn', 'Detecting location\u2026');
+
+  // ── Phase 0: Google Geolocation API (if enabled) ────────────
+  if (CFG.googleApiEnabled && typeof GeoLocationService !== 'undefined') {
+    // Configure the service with our endpoint
+    GeoLocationService.configure({
+      apiEndpoint: CFG.googleGeoApiUrl,
+      googleApiTimeoutMs: CFG.gpsTimeoutPhase1Ms,
+      nativeGpsTimeoutMs: CFG.gpsTimeoutPhase2Ms,
+      collectWifiData: true,
+      useGoogleApi: true,
+    });
+
+    // Attempt one-shot Google API position (best accuracy for desktop/WiFi)
+    GeoLocationService.getCurrentPosition({ useGoogleApi: true })
+      .then(function (result) {
+        // Google API got a fix — use it immediately
+        googlePositionUsed = true;
+        currentLat = result.lat;
+        currentLng = result.lng;
+        currentAccuracy = result.accuracy;
+        locationFixed = true;
+
+        updateGPSFromCoords(currentLat, currentLng, currentAccuracy);
+
+        // If we had a pending action queued, fire it now
+        if (pendingAction) {
+          const action = pendingAction;
+          pendingAction = null;
+          performAction(action);
+        }
+
+        // After the one-shot Google fix, start native GPS watch for continuous updates
+        startNativeGPSWatch();
+      })
+      .catch(function () {
+        // Google API failed — silently fall back to native GPS watch
+        console.log('Google Geolocation API unavailable, using native GPS.');
+        startNativeGPSWatch();
+      });
+  } else {
+    // Google API not enabled — use native GPS directly
+    startNativeGPSWatch();
+  }
+}
+
+/**
+ * Start the native browser geolocation watch for continuous position updates.
+ */
+function startNativeGPSWatch() {
+  if (gpsWatchId !== null) return; // Already watching
+
   gpsWatchId = navigator.geolocation.watchPosition(
     onGPSPosition,
     onGPSError,
@@ -41,22 +93,7 @@ function onGPSPosition(pos) {
   currentAccuracy = pos.coords.accuracy;
   locationFixed   = true;
 
-  const dist = getDistanceFromOffice(currentLat, currentLng);
-
-  // Update pill
-  if (dist <= CFG.officeRadiusM + Math.min(currentAccuracy || 0, CFG.maxAccuracyBufferM)) {
-    updateGPSSpill('ok', getAccuracyText(currentAccuracy));
-  } else {
-    updateGPSSpill('warn', getAccuracyText(currentAccuracy) + ' — ' + dist.toFixed(0) + 'm away');
-  }
-
-  // Show distance
-  gpsDistance.style.display = 'block';
-  gpsDistance.innerHTML = `<span class="text-muted">${dist.toFixed(0)}m from office  ·  ±${currentAccuracy ? Math.round(currentAccuracy) + 'm' : '?'}</span>`;
-  gpsDistance.style.display = '';
-
-  // Enable buttons
-  enableButtons(true);
+  updateGPSFromCoords(currentLat, currentLng, currentAccuracy);
 
   // If we had a pending action queued before GPS fixed, fire it now
   if (pendingAction) {
@@ -64,6 +101,31 @@ function onGPSPosition(pos) {
     pendingAction = null;
     performAction(action);
   }
+}
+
+/**
+ * Update the GPS pill and distance display with the given coordinates.
+ */
+function updateGPSFromCoords(lat, lng, accuracy) {
+  const dist = getDistanceFromOffice(lat, lng);
+
+  // Determine the source label
+  const sourceLabel = googlePositionUsed ? 'Google' : 'GPS';
+
+  // Update pill
+  if (dist <= CFG.officeRadiusM + Math.min(accuracy || 0, CFG.maxAccuracyBufferM)) {
+    updateGPSSpill('ok', getAccuracyText(accuracy) + ' (' + sourceLabel + ')');
+  } else {
+    updateGPSSpill('warn', getAccuracyText(accuracy) + ' \u2014 ' + dist.toFixed(0) + 'm away');
+  }
+
+  // Show distance
+  gpsDistance.style.display = 'block';
+  gpsDistance.innerHTML = `<span class="text-muted">${dist.toFixed(0)}m from office  ·  ±${accuracy ? Math.round(accuracy) + 'm' : '?'}  ·  ${sourceLabel}</span>`;
+  gpsDistance.style.display = '';
+
+  // Enable buttons
+  enableButtons(true);
 }
 
 function onGPSError(err) {
@@ -150,6 +212,10 @@ function performAction(action) {
   let method = 'gps';
   if (currentLat === null || currentLng === null) {
     method = CFG.wifiFallbackEnabled ? 'wifi' : 'manual';
+  } else if (googlePositionUsed) {
+    // If we got the fix from Google API, mark it as 'wifi' method since
+    // Google Geolocation API uses WiFi/cell-tower fingerprinting
+    method = 'wifi';
   }
 
   // Check if admin approval is needed for non-GPS methods
@@ -175,7 +241,17 @@ function performAction(action) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
-      .then(r => r.json())
+      .then(r => {
+        // Check content type to see if it's actually JSON
+        const contentType = r.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          // Not JSON - read as text to show the actual error
+          return r.text().then(text => {
+            throw new Error('Server returned non-JSON response. Content-Type: ' + contentType + '\n\nResponse preview (first 500 chars):\n' + text.substring(0, 500));
+          });
+        }
+        return r.json();
+      })
       .then(data => {
         processing = false;
         enableButtons(true);
@@ -194,6 +270,7 @@ function performAction(action) {
       .catch(err => {
         processing = false;
         enableButtons(true);
+        console.error('Fetch error:', err);
         showToast('❌ Network error: ' + err.message, 'danger');
       });
   }
@@ -210,9 +287,6 @@ function performAction(action) {
       .then(status => {
         if (status.has_pending) {
           // Token already generated by admin, use it
-          // We need to get the token - we'll call the API without it first
-          // and get rejected, which will prompt the admin flow. But better:
-          // query what token is pending isn't possible, so let user know
           showToast('Admin approval pending. Enter the code provided by your admin.', 'info');
           promptForAdminToken(action);
         } else {
@@ -251,7 +325,7 @@ function performActionWithToken(action, token) {
 
   const method = (currentLat === null || currentLng === null)
     ? (CFG.wifiFallbackEnabled ? 'wifi' : 'manual')
-    : 'gps';
+    : (googlePositionUsed ? 'wifi' : 'gps');
 
   const payload = {
     action: action,

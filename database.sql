@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS office_location (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 INSERT INTO office_location (name, latitude, longitude, radius_m)
-VALUES ('ICT Department Service Desk (Siriba Branch)', -0.003496, 34.610503, 700);   -- Siriba Campus, Maseno
+VALUES ('ICT Department Service Desk (Siriba Branch)', -0.002704, 34.608207, 700);   -- Siriba Campus, Maseno
 
 -- Table: geolocation_audit  (track all GPS/WiFi/manual attempts)
 -- ------------------------------------------------------------
